@@ -28,7 +28,7 @@ func Set(ctx context.Context, fields []zap.Field) context.Context {
 // it's recommended to use Append when you want to append some fields and do not lose the already added fields to context.
 func Append(ctx context.Context, fields []zap.Field) context.Context {
 	if loggerFields, ok := ctx.Value(loggerKey).([]zap.Field); ok {
-		fields = append(loggerFields, fields...)
+		fields = append(fields, loggerFields...)
 	}
 	return context.WithValue(ctx, loggerKey, fields)
 }
@@ -66,21 +66,4 @@ func GetField(ctx context.Context, key string) (field zap.Field, ok bool) {
 		}
 	}
 	return zap.Field{}, false
-}
-
-// Prune overwritten values from the logger context.
-func Prune(ctx context.Context) context.Context {
-	if loggerFields, ok := ctx.Value(loggerKey).([]zap.Field); ok {
-		prunedFields := make([]zap.Field, 0, len(loggerFields))
-		seenKeys := map[string]bool{}
-		for i := len(loggerFields) - 1; i >= 0; i-- {
-			field := loggerFields[i]
-			if _, seen := seenKeys[field.Key]; !seen {
-				prunedFields = append(prunedFields, field)
-			}
-			seenKeys[field.Key] = true
-		}
-		return Set(ctx, prunedFields)
-	}
-	return ctx
 }
