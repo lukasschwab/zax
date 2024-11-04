@@ -70,24 +70,24 @@ func TestSet(t *testing.T) {
 	testLog := NewLogger(t)
 
 	testTraceID2 := "test-trace-id-new"
-	ctx := context.Background()
+	traceIDCtx := Set(context.Background(), []zap.Field{zap.String(traceIDKey, testTraceID)})
 	tests := map[string]struct {
 		context             context.Context
 		expectedLoggerKey   string
 		expectedLoggerValue string
 	}{
 		"context for zax filed is empty": {
-			context:             Set(ctx, nil),
+			context:             Set(context.Background(), nil),
 			expectedLoggerKey:   "",
 			expectedLoggerValue: "",
 		},
 		"context with trace-id": {
-			context:             Set(ctx, []zap.Field{zap.String(traceIDKey, testTraceID)}),
+			context:             traceIDCtx,
 			expectedLoggerKey:   traceIDKey,
 			expectedLoggerValue: testTraceID,
 		},
 		"context with trace-id with new value(to check it will be updated)": {
-			context:             Set(ctx, []zap.Field{zap.String(traceIDKey, testTraceID2)}),
+			context:             Set(traceIDCtx, []zap.Field{zap.String(traceIDKey, testTraceID2)}),
 			expectedLoggerKey:   traceIDKey,
 			expectedLoggerValue: testTraceID2,
 		},
@@ -96,7 +96,7 @@ func TestSet(t *testing.T) {
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
 			ctx := tc.context
-			logger := testLog.logger.With(Get(ctx)...)
+			logger := testLog.logger.With(GetAll(ctx)...)
 			logger.Info("just a test record")
 			assert.NotNil(t, logger)
 			testLog.AssertLogEntryExist(t, tc.expectedLoggerKey, tc.expectedLoggerValue)
@@ -116,7 +116,7 @@ func TestAppend(t *testing.T) {
 			context:             Append(ctx, nil),
 			expectedFieldNumber: 1,
 		},
-		"context with appending span-id": {
+		"context with appending trace-id": {
 			context:             Append(ctx, []zap.Field{zap.String(spanIDKey, testTraceID)}),
 			expectedFieldNumber: 2,
 		},
@@ -125,11 +125,10 @@ func TestAppend(t *testing.T) {
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
 			ctx := tc.context
-			logger := testLog.logger.With(Get(ctx)...)
+			logger := testLog.logger.With(GetAll(ctx)...)
 			logger.Info("just a test record")
 			assert.NotNil(t, logger)
-			assert.Equal(t, tc.expectedFieldNumber, len(Get(ctx)))
-
+			assert.Equal(t, tc.expectedFieldNumber, len(GetAll(ctx)))
 		})
 	}
 }
@@ -155,7 +154,7 @@ func TestGet(t *testing.T) {
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
 			ctx := tc.context
-			testLog.logger.With(Get(ctx)...).Info("just a test record")
+			testLog.logger.With(GetAll(ctx)...).Info("just a test record")
 			if tc.expectedLoggerKey != nil {
 				testLog.AssertLogEntryKeyExist(t, *tc.expectedLoggerKey)
 			}
@@ -167,14 +166,17 @@ func TestGetField(t *testing.T) {
 	ctx := context.Background()
 	tests := map[string]struct {
 		context       context.Context
+		expectedOk    bool
 		expectedValue string
 	}{
 		"context empty": {
 			context:       context.TODO(),
+			expectedOk:    false,
 			expectedValue: "",
 		},
 		"context with trace-id field": {
 			context:       Set(ctx, []zap.Field{zap.String(traceIDKey, testTraceID)}),
+			expectedOk:    true,
 			expectedValue: testTraceID,
 		},
 	}
@@ -182,8 +184,92 @@ func TestGetField(t *testing.T) {
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
 			ctx := tc.context
-			field := GetField(ctx, traceIDKey)
-			assert.Equal(t, tc.expectedValue, field.String)
+			field, ok := GetField(ctx, traceIDKey)
+			assert.Equal(t, tc.expectedOk, ok)
+			if ok {
+				assert.Equal(t, tc.expectedValue, field.String)
+			}
+		})
+	}
+}
+
+func TestGetFields(t *testing.T) {
+	additionalKey := "additionalKey"
+	ctx := Set(
+		context.Background(), []zap.Field{
+			zap.String(traceIDKey, testTraceID),
+			zap.String(additionalKey, "additionalValue"),
+			zap.String("superfluous", ""),
+		},
+	)
+	absentKey := "absentKey"
+
+	fields := GetFields(ctx, traceIDKey, additionalKey, absentKey)
+	assert.Len(t, fields, 3)
+
+	var absentKeysField zap.Field
+	fieldKeys := make([]string, len(fields))
+	for i, field := range fields {
+		fieldKeys[i] = field.Key
+		if field.Key == AbsentFieldsKey {
+			absentKeysField = field
+		}
+	}
+
+	assert.ElementsMatch(t, []string{traceIDKey, additionalKey, AbsentFieldsKey}, fieldKeys)
+	t.Logf("%T %+v", absentKeysField.Interface, absentKeysField.Interface)
+
+	assert.Equal(t, zapcore.ArrayMarshalerType, absentKeysField.Type)
+	// BODGE: brittle to default print representation changes.
+	assert.Equal(t, fmt.Sprintf("[%s]", absentKey), fmt.Sprint(absentKeysField.Interface))
+}
+
+func TestPrune(t *testing.T) {
+	traceIDKey := traceIDKey
+	tests := map[string]struct {
+		context       context.Context
+		expectedOk    bool
+		expectedValue string
+	}{
+		"context empty": {
+			context:       context.TODO(),
+			expectedOk:    false,
+			expectedValue: "",
+		},
+		"context with trace-id field": {
+			context:       Set(context.Background(), []zap.Field{zap.String(traceIDKey, testTraceID)}),
+			expectedOk:    true,
+			expectedValue: testTraceID,
+		},
+		"context with overwritten trace-id field": {
+			context: Set(context.Background(), []zap.Field{
+				zap.String(traceIDKey, testTraceID),
+				zap.String(traceIDKey, "other"),
+			}),
+			expectedOk:    true,
+			expectedValue: "other",
+		},
+		"context with append-overwritten trace-id field": {
+			context: Append(
+				Set(context.Background(), []zap.Field{zap.String(traceIDKey, testTraceID)}),
+				[]zap.Field{zap.String(traceIDKey, "other")},
+			),
+			expectedOk:    true,
+			expectedValue: "other",
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			ctx := tc.context
+			pruned := Prune(ctx)
+
+			field, ok := GetField(pruned, traceIDKey)
+			assert.Equal(t, tc.expectedOk, ok)
+			if ok {
+				assert.Equal(t, 1, len(GetAll(pruned)))
+				assert.Equal(t, tc.expectedValue, field.String)
+			}
 		})
 	}
 }

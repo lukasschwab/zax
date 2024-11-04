@@ -20,8 +20,8 @@ func LogWithZap(logger *zap.Logger) {
 
 func LogWithZax(logger *zap.Logger) {
 	ctx := context.Background()
-	Set(ctx, someFields)
-	logger.With(Get(ctx)...).Info("logging something")
+	Append(ctx, someFields)
+	logger.With(GetAll(ctx)...).Info("logging something")
 }
 
 func BenchmarkLoggingWithOnlyZap(b *testing.B) {
